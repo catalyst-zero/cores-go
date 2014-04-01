@@ -5,7 +5,7 @@ PWD := $(shell pwd)
 
 BUILD_PATH := $(PWD)/.gobuild
 
-C0_PATH := $(BUILD_PATH)/src/$(PACKAGE)
+C0_PATH := $(BUILD_PATH)/src/github.com/catalyst-zero/
 
 BIN=producer consumer
 

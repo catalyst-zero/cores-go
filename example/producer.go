@@ -4,7 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
-	coreos "github.com/catalyst-zero/cores-go"
+	cores "github.com/catalyst-zero/cores-go"
 	"time"
 )
 
@@ -26,15 +26,20 @@ func NewTransactionFinishedEvent() TransactionFinishedEvent {
 }
 
 func main() {
-	eventbus, err := coreos.NewAmqpClient(":5672")
+	eventbus, err := cores.NewAmqpClient("amqp://:5672", "example-producer")
 	if err != nil {
 		panic(err)
 	}
 
-	for {
-		time.Sleep(10 * time.Second)
+	producer, err := eventbus.CreateProducer(cores.ProducerOptions{EventName: "transaction-finished"})
 
-		payload := NewTransactionFinishedEvent()
-		eventbus.Broadcast("transaction-finished", payload)
+	for {
+		time.Sleep(time.Second)
+
+		for i := 0; i < 1000; i++ {
+			payload := NewTransactionFinishedEvent()
+			fmt.Printf("Sending %s\n", payload.Id)
+			producer.Send(payload)
+		}
 	}
 }
