@@ -31,15 +31,14 @@ func main() {
 		panic(err)
 	}
 
-	producer, err := eventbus.CreateProducer(cores.ProducerOptions{EventName: "transaction-finished"})
-
 	for {
 		time.Sleep(time.Second)
 
-		for i := 0; i < 1000; i++ {
+		for i := 0; i < 3000; i++ {
 			payload := NewTransactionFinishedEvent()
 			fmt.Printf("Sending %s\n", payload.Id)
-			producer.Send(payload)
+			eventbus.Publish("transaction-finished", payload)
 		}
 	}
+
 }

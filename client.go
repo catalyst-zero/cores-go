@@ -25,13 +25,6 @@ type Client interface {
 	// Stops all subscribes and closes all internal connections
 	Close() error
 
-	CreateProducer(options ProducerOptions) (Producer, error)
-}
-
-type ProducerOptions struct {
-	EventName string
-}
-
-type Producer interface {
-	Send(payload interface{}) error
+	Publish(eventName string, payload interface{}) error
+	// PublishAck(eventName string, payload interface{}) error
 }

@@ -12,18 +12,32 @@ func NewAmqpClient(addr, consumergroup string) (Client, error) {
 		return nil, err
 	}
 
-	client := &amqpClient{
-		consumerGroup: consumergroup,
-		connection:    connection,
-		subscribers:   make([]*amqpConsumer, 0),
+	channel, err := connection.Channel()
+	if err != nil {
+		return nil, err
 	}
+
+	client := &amqpClient{
+		consumerGroup:   consumergroup,
+		connection:      connection,
+		publishExchange: "hutch",
+		publishChannel:  channel,
+		subscribers:     make([]*amqpConsumer, 0),
+	}
+
+	if err := client.ensurePublishingExchange(); err != nil {
+		return nil, err
+	}
+
 	return client, nil
 }
 
 type amqpClient struct {
-	consumerGroup string
-	connection    *amqp.Connection
-	subscribers   []*amqpConsumer
+	consumerGroup   string
+	connection      *amqp.Connection
+	publishChannel  *amqp.Channel
+	publishExchange string
+	subscribers     []*amqpConsumer
 }
 
 // Returns the name of this consumer group, e.g. "orlok" or "hades"
@@ -31,37 +45,46 @@ func (client *amqpClient) GetConsumerGroup() string {
 	return client.consumerGroup
 }
 
-// Publish an event to all consumer groups
-func (client *amqpClient) CreateProducer(options ProducerOptions) (Producer, error) {
-	channel, err := client.connection.Channel()
+func (client *amqpClient) Publish(eventName string, payload interface{}) error {
+	exchangeName := client.publishExchange
+	routingKey := eventName
+
+	data, err := json.Marshal(payload)
 	if err != nil {
-		return nil, err
+		// Failed to encode payload
+		return err
 	}
 
-	if err = channel.ExchangeDeclare(options.EventName, "fanout", true, false, false, false, nil); err != nil {
-		// Failed to create exchange (or ensure it already exists properly)
-		return nil, err
+	publishing := amqp.Publishing{
+		ContentType:     "application/json",
+		ContentEncoding: "UTF-8",
+		DeliveryMode:    2,
+		Body:            data,
 	}
 
-	return &amqpProducer{options, channel}, nil
+	return client.publishChannel.Publish(exchangeName, routingKey, false, false, publishing)
+}
+
+func (client *amqpClient) ensurePublishingExchange() error {
+	return channel.ExchangeDeclare(client.publishExchange, "topic", true, false, false, false, nil)
 }
 
 // Start receiving events. Events are distributed in the current consumer-group, so not every consumer receives all events.
 func (client *amqpClient) Subscribe(eventName string, autoAck bool, handler Handler) error {
+	queueName := client.queueName(eventName)
+
 	channel, err := client.connection.Channel()
 	if err != nil {
 		return err
 	}
 
-	if err = client.ensureExchange(channel, eventName); err != nil {
-		return err
-	}
 	if err = client.ensureConsumer(channel, eventName); err != nil {
 		return err
 	}
 
 	consumerTag := fmt.Sprintf("cores-go#%s.%s", client.consumerGroup, eventName)
-	deliveryChan, err := channel.Consume(client.queueName(eventName), consumerTag, autoAck, false, false, false, nil)
+	deliveryChan, err := channel.Consume(queueName, consumerTag, autoAck, false, false, false, nil)
+
 	if err != nil {
 		return err
 	}
@@ -79,9 +102,6 @@ func (client *amqpClient) Subscribe(eventName string, autoAck bool, handler Hand
 func (client *amqpClient) queueName(eventName string) string {
 	return fmt.Sprintf("%s.%s", client.consumerGroup, eventName)
 }
-func (client *amqpClient) ensureExchange(channel *amqp.Channel, eventName string) error {
-	return channel.ExchangeDeclare(eventName, "fanout", true, false, false, false, nil)
-}
 
 func (client *amqpClient) ensureConsumer(channel *amqp.Channel, eventName string) error {
 	queueName := client.queueName(eventName)
@@ -92,7 +112,7 @@ func (client *amqpClient) ensureConsumer(channel *amqp.Channel, eventName string
 	}
 
 	// Step 2) QueueBinding
-	if err := channel.QueueBind(queueName, "", eventName, false, nil); err != nil {
+	if err := channel.QueueBind(queueName, "", client.publishExchange, false, nil); err != nil {
 		return err
 	}
 	return nil
@@ -151,26 +171,4 @@ func (e *amqpEvent) Nack(requeue bool) error {
 }
 func (e *amqpEvent) Reject(requeue bool) error {
 	return e.delivery.Reject(requeue)
-}
-
-type amqpProducer struct {
-	Options ProducerOptions
-	Channel *amqp.Channel
-}
-
-func (p *amqpProducer) Send(payload interface{}) error {
-	data, err := json.Marshal(payload)
-	if err != nil {
-		// Failed to encode payload
-		return err
-	}
-
-	publishing := amqp.Publishing{
-		ContentType:     "application/json",
-		ContentEncoding: "UTF-8",
-		DeliveryMode:    2,
-		Body:            data,
-	}
-
-	return p.Channel.Publish(p.Options.EventName, "", false, false, publishing)
 }
