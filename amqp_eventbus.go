@@ -10,7 +10,7 @@ const (
 	CONTENT_TYPE_JSON = "application/json"
 )
 
-func NewAmqpClient(addr, consumergroup string) (EventBus, error) {
+func NewAmqpEventBus(addr, consumergroup string) (EventBus, error) {
 	connection, err := amqp.Dial(addr)
 	if err != nil {
 		return nil, err
