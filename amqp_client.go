@@ -6,7 +6,11 @@ import (
 	amqp "github.com/streadway/amqp"
 )
 
-func NewAmqpClient(addr, consumergroup string) (Client, error) {
+const (
+	CONTENT_TYPE_JSON = "application/json"
+)
+
+func NewAmqpClient(addr, consumergroup string) (EventBus, error) {
 	connection, err := amqp.Dial(addr)
 	if err != nil {
 		return nil, err
@@ -22,7 +26,7 @@ func NewAmqpClient(addr, consumergroup string) (Client, error) {
 		connection:      connection,
 		publishExchange: "hutch",
 		publishChannel:  channel,
-		subscribers:     make([]*amqpConsumer, 0),
+		subscribers:     make([]*amqpSubscriber, 0),
 	}
 
 	if err := client.ensurePublishingExchange(); err != nil {
@@ -37,7 +41,7 @@ type amqpClient struct {
 	connection      *amqp.Connection
 	publishChannel  *amqp.Channel
 	publishExchange string
-	subscribers     []*amqpConsumer
+	subscribers     []*amqpSubscriber
 }
 
 // Returns the name of this consumer group, e.g. "orlok" or "hades"
@@ -45,6 +49,7 @@ func (client *amqpClient) GetConsumerGroup() string {
 	return client.consumerGroup
 }
 
+// Publish sends the given payload to all consumers subscribed to the given event.
 func (client *amqpClient) Publish(eventName string, payload interface{}) error {
 	exchangeName := client.publishExchange
 	routingKey := eventName
@@ -56,7 +61,7 @@ func (client *amqpClient) Publish(eventName string, payload interface{}) error {
 	}
 
 	publishing := amqp.Publishing{
-		ContentType:     "application/json",
+		ContentType:     CONTENT_TYPE_JSON,
 		ContentEncoding: "UTF-8",
 		DeliveryMode:    2,
 		Body:            data,
@@ -66,7 +71,7 @@ func (client *amqpClient) Publish(eventName string, payload interface{}) error {
 }
 
 func (client *amqpClient) ensurePublishingExchange() error {
-	return channel.ExchangeDeclare(client.publishExchange, "topic", true, false, false, false, nil)
+	return client.publishChannel.ExchangeDeclare(client.publishExchange, "topic", true, false, false, false, nil)
 }
 
 // Start receiving events. Events are distributed in the current consumer-group, so not every consumer receives all events.
@@ -89,7 +94,7 @@ func (client *amqpClient) Subscribe(eventName string, autoAck bool, handler Hand
 		return err
 	}
 
-	subscriber := &amqpConsumer{
+	subscriber := &amqpSubscriber{
 		deliveryChan: deliveryChan,
 		closeChan:    make(chan bool),
 		handler:      handler,
@@ -126,14 +131,14 @@ func (client *amqpClient) Close() error {
 	return client.connection.Close()
 }
 
-type amqpConsumer struct {
+type amqpSubscriber struct {
 	deliveryChan <-chan amqp.Delivery
 	closeChan    chan bool
 	channel      *amqp.Channel
 	handler      Handler
 }
 
-func (c *amqpConsumer) Run() {
+func (c *amqpSubscriber) Run() {
 	for {
 		select {
 		case <-c.closeChan:
@@ -148,27 +153,6 @@ func (c *amqpConsumer) Run() {
 	}
 }
 
-func (c *amqpConsumer) Close() {
+func (c *amqpSubscriber) Close() {
 	c.closeChan <- true
-}
-
-type amqpEvent struct {
-	delivery *amqp.Delivery
-}
-
-func (e *amqpEvent) GetCorrelationId() string {
-	return e.delivery.CorrelationId
-}
-func (e *amqpEvent) Parse(value interface{}) error {
-	return json.Unmarshal(e.delivery.Body, value)
-}
-
-func (e *amqpEvent) Ack() error {
-	return e.delivery.Ack(false)
-}
-func (e *amqpEvent) Nack(requeue bool) error {
-	return e.delivery.Nack(false, requeue)
-}
-func (e *amqpEvent) Reject(requeue bool) error {
-	return e.delivery.Reject(requeue)
 }

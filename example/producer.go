@@ -37,7 +37,7 @@ func main() {
 		for i := 0; i < 3000; i++ {
 			payload := NewTransactionFinishedEvent()
 			fmt.Printf("Sending %s\n", payload.Id)
-			eventbus.Publish("transaction-finished", payload)
+			eventbus.Publish("payment.transaction-finished", payload)
 		}
 	}
 
