@@ -26,7 +26,7 @@ func NewTransactionFinishedEvent() TransactionFinishedEvent {
 }
 
 func main() {
-	eventbus, err := cores.NewAmqpClient("amqp://:5672", "example-producer")
+	eventbus, err := cores.NewAmqpEventBus("amqp://:5672")
 	if err != nil {
 		panic(err)
 	}
@@ -34,10 +34,12 @@ func main() {
 	for {
 		time.Sleep(time.Second)
 
-		for i := 0; i < 3000; i++ {
+		for i := 0; i < 2; i++ {
 			payload := NewTransactionFinishedEvent()
 			fmt.Printf("Sending %s\n", payload.Id)
-			eventbus.Publish("payment.transaction-finished", payload)
+			if err := eventbus.Publish("transaction-finished", payload); err != nil {
+				fmt.Printf("Failed to send\n")
+			}
 		}
 	}
 

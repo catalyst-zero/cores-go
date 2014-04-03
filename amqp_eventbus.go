@@ -4,54 +4,140 @@ import (
 	"encoding/json"
 	"fmt"
 	amqp "github.com/streadway/amqp"
+	"math/rand"
 )
 
 const (
 	CONTENT_TYPE_JSON = "application/json"
 )
 
-func NewAmqpEventBus(addr, consumergroup string) (EventBus, error) {
-	connection, err := amqp.Dial(addr)
-	if err != nil {
-		return nil, err
-	}
+type amqpConnectionDial func() (*amqp.Connection, error)
 
-	channel, err := connection.Channel()
-	if err != nil {
-		return nil, err
+func NewAmqpEventBus(addr string) (EventBus, error) {
+	factory := func() (*amqp.Connection, error) {
+		return amqp.Dial(addr)
 	}
 
 	client := &amqpClient{
-		consumerGroup:   consumergroup,
-		connection:      connection,
-		publishExchange: "hutch",
-		publishChannel:  channel,
-		subscribers:     make([]*amqpSubscriber, 0),
+		amqpPublisher{
+			PublishExchange: "hutch",
+		},
+		amqpSubscriptionManager{
+			PublishExchange: "hutch",
+			Subscribers:     make([]*amqpSubscriber, 0),
+		},
 	}
 
-	if err := client.ensurePublishingExchange(); err != nil {
-		return nil, err
-	}
+	runAmqpInitializer(factory, client)
 
 	return client, nil
 }
 
-type amqpClient struct {
-	consumerGroup   string
-	connection      *amqp.Connection
-	publishChannel  *amqp.Channel
-	publishExchange string
-	subscribers     []*amqpSubscriber
+func runAmqpInitializer(factory amqpConnectionDial, client *amqpClient) {
+	connection, err := factory()
+	if err != nil {
+		fmt.Printf("AMQP Error: Failed to redial: %v\n", err)
+		return
+	}
+
+	closeChan := connection.NotifyClose(make(chan *amqp.Error))
+
+	if err := client.Init(connection); err != nil {
+		fmt.Printf("AMQP Error: Failed to init amqpEventBus: %v\n", err)
+		return
+	}
+
+	go func() {
+		for err := range closeChan {
+			fmt.Printf("AMQP Error: %v\n", err) // TODO: Cleanup?
+			go runAmqpInitializer(factory, client)
+		}
+	}()
 }
 
-// Returns the name of this consumer group, e.g. "orlok" or "hades"
-func (client *amqpClient) GetConsumerGroup() string {
-	return client.consumerGroup
+type amqpClient struct {
+	amqpPublisher
+	amqpSubscriptionManager
+}
+
+func (bus *amqpClient) Init(connection *amqp.Connection) error {
+	if err := bus.amqpPublisher.Init(connection); err != nil {
+		return err
+	}
+	if err := bus.amqpSubscriptionManager.Init(connection); err != nil {
+		return err
+	}
+	return nil
+}
+
+func (bus *amqpClient) Close() error {
+	if err := bus.amqpPublisher.Close(); err != nil {
+		return err
+	}
+	return bus.amqpSubscriptionManager.Close()
+}
+
+type amqpSubscriptionManager struct {
+	PublishExchange string
+	connection      *amqp.Connection
+	Subscribers     []*amqpSubscriber
+}
+
+func (sub *amqpSubscriptionManager) Init(connection *amqp.Connection) error {
+	sub.connection = connection
+
+	if sub.Subscribers != nil && len(sub.Subscribers) > 0 {
+		for _, subscriber := range sub.Subscribers {
+			subscriber.init(sub.PublishExchange, connection)
+		}
+	}
+	return nil
+}
+
+// Start receiving events. Events are distributed in the current consumer-group, so not every consumer receives all events.
+func (sub *amqpSubscriptionManager) Subscribe(eventName, consumerGroup string, autoAck bool) (Subscription, error) {
+	queueName := sub.queueName(eventName, consumerGroup)
+	consumerTag := fmt.Sprintf("cores-go#%s.%s#%d", consumerGroup, eventName, rand.Uint32())
+
+	subscription := newAmqpSubscription(queueName, consumerTag, eventName, autoAck)
+	if err := subscription.init(sub.PublishExchange, sub.connection); err != nil {
+		return nil, err
+	}
+	sub.Subscribers = append(sub.Subscribers, subscription)
+	return subscription, nil
+}
+
+func (client *amqpSubscriptionManager) queueName(eventName, consumerGroup string) string {
+	return fmt.Sprintf("%s.%s", consumerGroup, eventName)
+}
+
+// Stops all subscribes and closes all internal connections
+func (client *amqpSubscriptionManager) Close() error {
+	for _, sub := range client.Subscribers {
+		sub.Close()
+	}
+	return client.connection.Close()
+}
+
+// AmqpPublisher contains all the logic needed to send events to the broker.
+type amqpPublisher struct {
+	PublishExchange string
+	publishChannel  *amqp.Channel
+}
+
+func (client *amqpPublisher) Init(connection *amqp.Connection) error {
+	channel, err := connection.Channel()
+	if err != nil {
+		return err
+	}
+	client.publishChannel = channel
+
+	return client.ensurePublishingExchange()
 }
 
 // Publish sends the given payload to all consumers subscribed to the given event.
-func (client *amqpClient) Publish(eventName string, payload interface{}) error {
-	exchangeName := client.publishExchange
+func (client *amqpPublisher) Publish(eventName string, payload interface{}) error {
+	exchangeName := client.PublishExchange
 	routingKey := eventName
 
 	data, err := json.Marshal(payload)
@@ -70,89 +156,13 @@ func (client *amqpClient) Publish(eventName string, payload interface{}) error {
 	return client.publishChannel.Publish(exchangeName, routingKey, false, false, publishing)
 }
 
-func (client *amqpClient) ensurePublishingExchange() error {
-	return client.publishChannel.ExchangeDeclare(client.publishExchange, "topic", true, false, false, false, nil)
+func (p *amqpPublisher) ensurePublishingExchange() error {
+	return p.publishChannel.ExchangeDeclare(p.PublishExchange, "topic", true, false, false, false, nil)
 }
 
-// Start receiving events. Events are distributed in the current consumer-group, so not every consumer receives all events.
-func (client *amqpClient) Subscribe(eventName string, autoAck bool, handler Handler) error {
-	queueName := client.queueName(eventName)
-
-	channel, err := client.connection.Channel()
-	if err != nil {
-		return err
-	}
-
-	if err = client.ensureConsumer(channel, eventName); err != nil {
-		return err
-	}
-
-	consumerTag := fmt.Sprintf("cores-go#%s.%s", client.consumerGroup, eventName)
-	deliveryChan, err := channel.Consume(queueName, consumerTag, autoAck, false, false, false, nil)
-
-	if err != nil {
-		return err
-	}
-
-	subscriber := &amqpSubscriber{
-		deliveryChan: deliveryChan,
-		closeChan:    make(chan bool),
-		handler:      handler,
-	}
-	go subscriber.Run()
-	client.subscribers = append(client.subscribers, subscriber)
-	return nil
-}
-
-func (client *amqpClient) queueName(eventName string) string {
-	return fmt.Sprintf("%s.%s", client.consumerGroup, eventName)
-}
-
-func (client *amqpClient) ensureConsumer(channel *amqp.Channel, eventName string) error {
-	queueName := client.queueName(eventName)
-
-	// Step 1) Queue
-	if _, err := channel.QueueDeclare(queueName, true, false, false, false, nil); err != nil {
-		return err
-	}
-
-	// Step 2) QueueBinding
-	if err := channel.QueueBind(queueName, "", client.publishExchange, false, nil); err != nil {
-		return err
+func (p *amqpPublisher) Close() error {
+	if p.publishChannel != nil {
+		return p.publishChannel.Close()
 	}
 	return nil
-}
-
-// Stops all subscribes and closes all internal connections
-func (client *amqpClient) Close() error {
-	for _, sub := range client.subscribers {
-		sub.Close()
-	}
-	return client.connection.Close()
-}
-
-type amqpSubscriber struct {
-	deliveryChan <-chan amqp.Delivery
-	closeChan    chan bool
-	channel      *amqp.Channel
-	handler      Handler
-}
-
-func (c *amqpSubscriber) Run() {
-	for {
-		select {
-		case <-c.closeChan:
-			// TODO: Properly close channel?
-			return
-		case delivery := <-c.deliveryChan:
-			fmt.Sprintf("%v\n", delivery)
-
-			event := &amqpEvent{&delivery}
-			c.handler.Handle(event)
-		}
-	}
-}
-
-func (c *amqpSubscriber) Close() {
-	c.closeChan <- true
 }

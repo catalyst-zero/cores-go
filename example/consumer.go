@@ -12,25 +12,21 @@ type TransactionFinishedEvent struct {
 	Id string `json:"id"`
 }
 
-type Handler struct {
-	counter int
-}
+var counter int = 0
 
-func (h *Handler) DoWork(transaction TransactionFinishedEvent) error {
+func DoWork(transaction TransactionFinishedEvent) error {
 	// fmt.Printf("> %s\n", transaction.Id)
-	h.counter++
+	counter++
 
-	if h.counter > 3 {
-		h.counter = 0
+	if counter > 3 {
+		counter = 0
 		return fmt.Errorf("Something went wrong ...")
 	} else {
 		return nil
 	}
 }
 
-func (h *Handler) Handle(event cores.Event) {
-	// fmt.Printf("Event received: %v\n", event)
-
+func Handle(event cores.Event) {
 	var transaction TransactionFinishedEvent
 
 	if err := event.Parse(&transaction); err != nil {
@@ -42,7 +38,7 @@ func (h *Handler) Handle(event cores.Event) {
 		return
 	}
 
-	if err := h.DoWork(transaction); err != nil {
+	if err := DoWork(transaction); err != nil {
 		if err := event.Nack(true); err != nil {
 			fmt.Printf("ERROR: Nack() failed: %v\n", err)
 		}
@@ -54,13 +50,19 @@ func (h *Handler) Handle(event cores.Event) {
 }
 
 func main() {
-	eventbus, err := cores.NewAmqpClient("amqp://:5672", "example-consumer")
+	eventbus, err := cores.NewAmqpEventBus("amqp://:5672")
 	if err != nil {
 		panic(err)
 	}
+	defer eventbus.Close()
 
-	eventbus.Subscribe("transaction-finished", false, new(Handler))
+	subscriber, err := eventbus.Subscribe("transaction-finished", "example-consumer", false)
+	if err != nil {
+		panic(err)
+	}
+	defer subscriber.Close()
 
-	// Block, since Subscibe() runs in its own goroutine
-	select {}
+	for event := range subscriber.Events() {
+		Handle(event)
+	}
 }

@@ -27,7 +27,7 @@ func main() {
 	}()
 
 	autoAck := false
-	consumerGroup := "example-consumer"
+	consumerGroup := "statistics"
 	eventName := "transaction-finished"
 	consumerTag := "" // fmt.Sprintf("cores-go#%s.%s", consumerGroup, eventName)
 	queueName := fmt.Sprintf("%s.%s", consumerGroup, eventName)
