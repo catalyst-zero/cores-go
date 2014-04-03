@@ -28,7 +28,6 @@ type amqpSubscriber struct {
 }
 
 func (c *amqpSubscriber) init(publishExchange string, connection *amqp.Connection) error {
-	fmt.Printf("Initializing subscriber to consume from %s\n", c.QueueName)
 	assertNotNil(connection)
 
 	channel, err := connection.Channel()

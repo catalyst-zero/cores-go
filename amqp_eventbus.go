@@ -14,11 +14,21 @@ const (
 
 type amqpConnectionDial func() (*amqp.Connection, error)
 
-func NewAmqpEventBus(addr string) (EventBus, error) {
+func NewAmqpEventBus(url string) (EventBus, error) {
 	factory := func() (*amqp.Connection, error) {
-		return amqp.Dial(addr)
+		return amqp.Dial(url)
 	}
+	return newAmqpEventBus(factory)
+}
 
+func NewAmqpEventBusConfig(url string, config amqp.Config) (EventBus, error) {
+	factory := func() (*amqp.Connection, error) {
+		return amqp.DialConfig(url, config)
+	}
+	return newAmqpEventBus(factory)
+}
+
+func newAmqpEventBus(factory amqpConnectionDial) (EventBus, error) {
 	client := &amqpClient{
 		amqpPublisher{
 			PublishExchange: "hutch",
@@ -28,21 +38,15 @@ func NewAmqpEventBus(addr string) (EventBus, error) {
 			Subscribers:     make([]*amqpSubscriber, 0),
 		},
 	}
-
 	runAmqpInitializer(factory, client)
 
 	return client, nil
 }
 
-func retryLater(factory amqpConnectionDial, client *amqpClient) {
-	time.Sleep(5 * time.Second)
-	runAmqpInitializer(factory, client)
-}
-
 func runAmqpInitializer(factory amqpConnectionDial, client *amqpClient) {
 	connection, err := factory()
 	if err != nil {
-		fmt.Printf("AMQP Error: Failed to redial: %v\n", err)
+		fmt.Printf("AMQP Error: Failed to dial: %v\n", err)
 		go retryLater(factory, client)
 		return
 	}
@@ -61,6 +65,11 @@ func runAmqpInitializer(factory amqpConnectionDial, client *amqpClient) {
 			go runAmqpInitializer(factory, client)
 		}
 	}()
+}
+
+func retryLater(factory amqpConnectionDial, client *amqpClient) {
+	time.Sleep(5 * time.Second)
+	runAmqpInitializer(factory, client)
 }
 
 type amqpClient struct {
@@ -145,6 +154,10 @@ func (client *amqpPublisher) Init(connection *amqp.Connection) error {
 
 // Publish sends the given payload to all consumers subscribed to the given event.
 func (client *amqpPublisher) Publish(eventName string, payload interface{}) error {
+	if client.publishChannel == nil {
+		return fmt.Errorf("connection currently not available.")
+	}
+
 	exchangeName := client.PublishExchange
 	routingKey := eventName
 
