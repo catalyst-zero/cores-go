@@ -5,6 +5,7 @@ import (
 	"fmt"
 	amqp "github.com/streadway/amqp"
 	"math/rand"
+	"time"
 )
 
 const (
@@ -33,10 +34,16 @@ func NewAmqpEventBus(addr string) (EventBus, error) {
 	return client, nil
 }
 
+func retryLater(factory amqpConnectionDial, client *amqpClient) {
+	time.Sleep(5 * time.Second)
+	runAmqpInitializer(factory, client)
+}
+
 func runAmqpInitializer(factory amqpConnectionDial, client *amqpClient) {
 	connection, err := factory()
 	if err != nil {
 		fmt.Printf("AMQP Error: Failed to redial: %v\n", err)
+		go retryLater(factory, client)
 		return
 	}
 
@@ -44,6 +51,7 @@ func runAmqpInitializer(factory amqpConnectionDial, client *amqpClient) {
 
 	if err := client.Init(connection); err != nil {
 		fmt.Printf("AMQP Error: Failed to init amqpEventBus: %v\n", err)
+		go retryLater(factory, client)
 		return
 	}
 

@@ -1,6 +1,7 @@
 package client
 
 import (
+	"fmt"
 	amqp "github.com/streadway/amqp"
 )
 
@@ -27,12 +28,26 @@ type amqpSubscriber struct {
 }
 
 func (c *amqpSubscriber) init(publishExchange string, connection *amqp.Connection) error {
+	fmt.Printf("Initializing subscriber to consume from %s\n", c.QueueName)
 	assertNotNil(connection)
 
 	channel, err := connection.Channel()
 	if err != nil {
 		return err
 	}
+
+	// Error listener
+	errorChan := channel.NotifyClose(make(chan *amqp.Error))
+	go func() {
+		// NOTE: We need this in case the channel gets broken (but not the connection), e.g.
+		// when an invalid message is acknowledged.
+		for err := range errorChan {
+			fmt.Printf("ERROR: In channel for queue %s: %v\n", c.QueueName, err)
+			if cerr := c.init(publishExchange, connection); cerr != nil {
+				fmt.Printf("ERROR: Failed to reestablish channel for queue %s: %v\n", c.QueueName, cerr)
+			}
+		}
+	}()
 
 	// Step 1) Queue
 	if _, err := channel.QueueDeclare(c.QueueName, true, false, false, false, nil); err != nil {

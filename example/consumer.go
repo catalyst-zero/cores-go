@@ -30,6 +30,8 @@ func Handle(event cores.Event) {
 	var transaction TransactionFinishedEvent
 
 	if err := event.Parse(&transaction); err != nil {
+		fmt.Printf("ERROR: Event#Parse() failed: %v\n", err)
+
 		if err := event.Reject(false); err != nil {
 			fmt.Printf("ERROR: Reject failed: %v\n", err)
 			return
