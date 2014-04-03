@@ -8,7 +8,7 @@ import (
 )
 
 type amqpEvent struct {
-	delivery *amqp.Delivery
+	delivery amqp.Delivery
 }
 
 func (e *amqpEvent) GetCorrelationId() string {

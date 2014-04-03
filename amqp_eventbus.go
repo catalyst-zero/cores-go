@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"fmt"
 	amqp "github.com/streadway/amqp"
-	"os"
 	"time"
 )
 
@@ -113,32 +112,13 @@ func (sub *amqpSubscriptionManager) Init(connection *amqp.Connection) error {
 
 // Start receiving events. Events are distributed in the current consumer-group, so not every consumer receives all events.
 func (sub *amqpSubscriptionManager) Subscribe(eventName, consumerGroup string, autoAck bool) (Subscription, error) {
-	queueName := sub.queueName(eventName, consumerGroup)
-	consumerTag := sub.consumerTag(consumerGroup, eventName)
 
-	subscription := newAmqpSubscription(queueName, consumerTag, eventName, autoAck)
+	subscription := newAmqpSubscription(eventName, consumerGroup, autoAck)
 	if err := subscription.init(sub.PublishExchange, sub.connection); err != nil {
 		return nil, err
 	}
 	sub.Subscribers = append(sub.Subscribers, subscription)
 	return subscription, nil
-}
-
-func (sub *amqpSubscriptionManager) consumerTag(consumerGroup, eventName string) string {
-	var hostname string
-
-	hostname, err := os.Hostname()
-	if err != nil {
-		hostname = "localhost"
-	}
-
-	pid := os.Getpid()
-
-	return fmt.Sprintf("cores-go#%s.%s#%d@%s", consumerGroup, eventName, pid, hostname)
-}
-
-func (client *amqpSubscriptionManager) queueName(eventName, consumerGroup string) string {
-	return fmt.Sprintf("%s.%s", consumerGroup, eventName)
 }
 
 // Stops all subscribes and closes all internal connections
